@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import clientPromise from '../../../lib/mongodb.js';
 import { verifyToken } from '../../../lib/auth.js';
 import { ObjectId } from 'mongodb';
-import {PLANS} from '../../../lib/plans.js'
 
 export async function GET(request) {
   try {
@@ -151,13 +150,8 @@ export async function POST(request) {
       userId: new ObjectId(decoded.userId)
     });
 
-    // Determine user's plan and allowed aliases
-    const userPlan = (user && user.plan) ? user.plan : PLANS.FREE.id;
-    let maxAliases = PLANS.FREE.aliasLimit;
-    if (userPlan === PLANS.PRO.id) {
-      maxAliases = Infinity;
-    }
-    if (maxAliases !== Infinity && userAliasCount >= maxAliases) {
+    const maxAliases = 50; // Set your desired limit
+    if (userAliasCount >= maxAliases) {
       return NextResponse.json(
         { error: `You have reached the maximum limit of ${maxAliases} aliases` },
         { status: 400 }
