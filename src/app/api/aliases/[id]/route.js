@@ -27,10 +27,23 @@ export async function DELETE(request, { params }) {
     const client = await clientPromise;
     const db = client.db();
 
-    // Delete alias (only if it belongs to the user)
+    // Check if user is owner (for both personal and collaborative)
+    const alias = await db.collection('aliases').findOne({
+      _id: new ObjectId(id),
+      ownerId: new ObjectId(decoded.userId)
+    });
+
+    if (!alias) {
+      return NextResponse.json(
+        { error: 'Alias not found or you are not the owner' },
+        { status: 404 }
+      );
+    }
+
+    // Delete alias (only if owner)
     const result = await db.collection('aliases').deleteOne({
       _id: new ObjectId(id),
-      userId: new ObjectId(decoded.userId)
+      ownerId: new ObjectId(decoded.userId)
     });
 
     if (result.deletedCount === 0) {

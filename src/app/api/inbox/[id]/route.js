@@ -1,4 +1,3 @@
-// app/api/inbox/[id]/route.js - Enhanced with debugging
 import { NextResponse } from 'next/server';
 import clientPromise from '../../../../lib/mongodb.js';
 import { verifyToken } from '../../../../lib/auth.js';
@@ -32,29 +31,42 @@ export async function GET(request, { params }) {
     const client = await clientPromise;
     const db = client.db();
 
-    const email = await db.collection('inbox').findOne({
+    // First, fetch the email
+    let email = await db.collection('inbox').findOne({
       _id: new ObjectId(id),
-      userId: new ObjectId(decoded.userId)
+      $or: [
+        { userId: new ObjectId(decoded.userId) },
+        { userId: decoded.userId } // Legacy string
+      ]
     });
 
     if (!email) {
-      console.log('Email not found with ObjectId userId, trying string userId...');
+      // Try without userId filter first, then verify access
+      email = await db.collection('inbox').findOne({ _id: new ObjectId(id) });
       
-      // Try with string userId in case of data inconsistency
-      const emailWithStringUserId = await db.collection('inbox').findOne({
-        _id: new ObjectId(id),
-        userId: decoded.userId
-      });
-      
-      if (emailWithStringUserId) {
-        console.log('Found email with string userId - data inconsistency detected');
-        return NextResponse.json(emailWithStringUserId);
+      if (!email) {
+        return NextResponse.json(
+          { error: 'Email not found' },
+          { status: 404 }
+        );
       }
-      
-      return NextResponse.json(
-        { error: 'Email not found' },
-        { status: 404 }
-      );
+
+      // Verify access via aliasEmail
+      const accessibleAliases = await db.collection('aliases').find({
+        $or: [
+          { ownerId: new ObjectId(decoded.userId) },
+          { 'collaborators.userId': new ObjectId(decoded.userId) }
+        ]
+      }).toArray();
+
+      const userAliasEmails = accessibleAliases.map(a => a.aliasEmail);
+
+      if (!userAliasEmails.includes(email.aliasEmail)) {
+        return NextResponse.json(
+          { error: 'Unauthorized access to email' },
+          { status: 403 }
+        );
+      }
     }
 
     console.log('Email found:', { from: email.from, subject: email.subject });
@@ -103,11 +115,50 @@ export async function PATCH(request, { params }) {
     const client = await clientPromise;
     const db = client.db();
 
-    // Try both ObjectId and string userId for compatibility
+    // First, fetch to verify access
+    let email = await db.collection('inbox').findOne({
+      _id: new ObjectId(id),
+      $or: [
+        { userId: new ObjectId(decoded.userId) },
+        { userId: decoded.userId }
+      ]
+    });
+
+    if (!email) {
+      email = await db.collection('inbox').findOne({ _id: new ObjectId(id) });
+      if (!email) {
+        return NextResponse.json(
+          { error: 'Email not found' },
+          { status: 404 }
+        );
+      }
+
+      // Verify access
+      const accessibleAliases = await db.collection('aliases').find({
+        $or: [
+          { ownerId: new ObjectId(decoded.userId) },
+          { 'collaborators.userId': new ObjectId(decoded.userId) }
+        ]
+      }).toArray();
+
+      const userAliasEmails = accessibleAliases.map(a => a.aliasEmail);
+
+      if (!userAliasEmails.includes(email.aliasEmail)) {
+        return NextResponse.json(
+          { error: 'Unauthorized access to email' },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Update (shared isRead for simplicity)
     let result = await db.collection('inbox').updateOne(
       {
         _id: new ObjectId(id),
-        userId: new ObjectId(decoded.userId)
+        $or: [
+          { userId: new ObjectId(decoded.userId) },
+          { userId: decoded.userId }
+        ]
       },
       {
         $set: {
@@ -117,13 +168,10 @@ export async function PATCH(request, { params }) {
       }
     );
 
-    // If no match with ObjectId, try string userId
+    // If no match with userId, try direct (for shared)
     if (result.matchedCount === 0) {
       result = await db.collection('inbox').updateOne(
-        {
-          _id: new ObjectId(id),
-          userId: decoded.userId
-        },
+        { _id: new ObjectId(id) },
         {
           $set: {
             isRead: isRead,
@@ -183,17 +231,55 @@ export async function DELETE(request, { params }) {
     const client = await clientPromise;
     const db = client.db();
 
+    // Fetch to verify access
+    let email = await db.collection('inbox').findOne({
+      _id: new ObjectId(id),
+      $or: [
+        { userId: new ObjectId(decoded.userId) },
+        { userId: decoded.userId }
+      ]
+    });
+
+    if (!email) {
+      email = await db.collection('inbox').findOne({ _id: new ObjectId(id) });
+      if (!email) {
+        return NextResponse.json(
+          { error: 'Email not found' },
+          { status: 404 }
+        );
+      }
+
+      // Verify access
+      const accessibleAliases = await db.collection('aliases').find({
+        $or: [
+          { ownerId: new ObjectId(decoded.userId) },
+          { 'collaborators.userId': new ObjectId(decoded.userId) }
+        ]
+      }).toArray();
+
+      const userAliasEmails = accessibleAliases.map(a => a.aliasEmail);
+
+      if (!userAliasEmails.includes(email.aliasEmail)) {
+        return NextResponse.json(
+          { error: 'Unauthorized access to email' },
+          { status: 403 }
+        );
+      }
+    }
+
     // Try both ObjectId and string userId for compatibility
     let result = await db.collection('inbox').deleteOne({
       _id: new ObjectId(id),
-      userId: new ObjectId(decoded.userId)
+      $or: [
+        { userId: new ObjectId(decoded.userId) },
+        { userId: decoded.userId }
+      ]
     });
 
-    // If no match with ObjectId, try string userId
+    // If no match with userId, try direct (for shared)
     if (result.deletedCount === 0) {
       result = await db.collection('inbox').deleteOne({
-        _id: new ObjectId(id),
-        userId: decoded.userId
+        _id: new ObjectId(id)
       });
     }
 

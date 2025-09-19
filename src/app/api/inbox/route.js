@@ -1,303 +1,3 @@
-// // import { NextResponse } from 'next/server';
-// // import clientPromise from '../../../lib/mongodb.js';
-// // import { verifyToken } from '../../../lib/auth.js';
-// // import { ObjectId } from 'mongodb';
-
-// // export async function GET(request, { params }) {
-// //   try {
-// //     const token = request.cookies.get('token')?.value;
-    
-// //     if (!token) {
-// //       return NextResponse.json(
-// //         { error: 'Not authenticated' },
-// //         { status: 401 }
-// //       );
-// //     }
-
-// //     const decoded = verifyToken(token);
-// //     const { id } = await params;
-
-// //     if (!ObjectId.isValid(id)) {
-// //       return NextResponse.json(
-// //         { error: 'Invalid email ID' },
-// //         { status: 400 }
-// //       );
-// //     }
-
-// //     const client = await clientPromise;
-// //     const db = client.db();
-
-// //     const email = await db.collection('inbox').findOne({
-// //       _id: new ObjectId(id),
-// //       userId: new ObjectId(decoded.userId)
-// //     });
-
-// //     if (!email) {
-// //       return NextResponse.json(
-// //         { error: 'Email not found' },
-// //         { status: 404 }
-// //       );
-// //     }
-
-// //     return NextResponse.json(email);
-
-// //   } catch (error) {
-// //     console.error('Get email error:', error);
-    
-// //     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-// //       return NextResponse.json(
-// //         { error: 'Invalid or expired token' },
-// //         { status: 401 }
-// //       );
-// //     }
-    
-// //     return NextResponse.json(
-// //       { error: 'Internal server error' },
-// //       { status: 500 }
-// //     );
-// //   }
-// // }
-
-// // export async function PATCH(request, { params }) {
-// //   try {
-// //     const token = request.cookies.get('token')?.value;
-    
-// //     if (!token) {
-// //       return NextResponse.json(
-// //         { error: 'Not authenticated' },
-// //         { status: 401 }
-// //       );
-// //     }
-
-// //     const decoded = verifyToken(token);
-// //     const { id } = params;
-// //     const { isRead } = await request.json();
-
-// //     if (!ObjectId.isValid(id)) {
-// //       return NextResponse.json(
-// //         { error: 'Invalid email ID' },
-// //         { status: 400 }
-// //       );
-// //     }
-
-// //     const client = await clientPromise;
-// //     const db = client.db();
-
-// //     const result = await db.collection('inbox').updateOne(
-// //       {
-// //         _id: new ObjectId(id),
-// //         userId: new ObjectId(decoded.userId)
-// //       },
-// //       {
-// //         $set: {
-// //           isRead: isRead,
-// //           readAt: isRead ? new Date() : null
-// //         }
-// //       }
-// //     );
-
-// //     if (result.matchedCount === 0) {
-// //       return NextResponse.json(
-// //         { error: 'Email not found' },
-// //         { status: 404 }
-// //       );
-// //     }
-
-// //     return NextResponse.json({ message: 'Email updated successfully' });
-
-// //   } catch (error) {
-// //     console.error('Update email error:', error);
-    
-// //     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-// //       return NextResponse.json(
-// //         { error: 'Invalid or expired token' },
-// //         { status: 401 }
-// //       );
-// //     }
-    
-// //     return NextResponse.json(
-// //       { error: 'Internal server error' },
-// //       { status: 500 }
-// //     );
-// //   }
-// // }
-
-// // export async function DELETE(request, { params }) {
-// //   try {
-// //     const token = request.cookies.get('token')?.value;
-    
-// //     if (!token) {
-// //       return NextResponse.json(
-// //         { error: 'Not authenticated' },
-// //         { status: 401 }
-// //       );
-// //     }
-
-// //     const decoded = verifyToken(token);
-// //     const { id } = params;
-
-// //     if (!ObjectId.isValid(id)) {
-// //       return NextResponse.json(
-// //         { error: 'Invalid email ID' },
-// //         { status: 400 }
-// //       );
-// //     }
-
-// //     const client = await clientPromise;
-// //     const db = client.db();
-
-// //     const result = await db.collection('inbox').deleteOne({
-// //       _id: new ObjectId(id),
-// //       userId: new ObjectId(decoded.userId)
-// //     });
-
-// //     if (result.deletedCount === 0) {
-// //       return NextResponse.json(
-// //         { error: 'Email not found' },
-// //         { status: 404 }
-// //       );
-// //     }
-
-// //     return NextResponse.json({ message: 'Email deleted successfully' });
-
-// //   } catch (error) {
-// //     console.error('Delete email error:', error);
-    
-// //     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-// //       return NextResponse.json(
-// //         { error: 'Invalid or expired token' },
-// //         { status: 401 }
-// //       );
-// //     }
-    
-// //     return NextResponse.json(
-// //       { error: 'Internal server error' },
-// //       { status: 500 }
-// //     );
-// //   }
-// // }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // Fix 1: app/api/inbox/route.js (Remove the id destructuring)
-// import { NextResponse } from 'next/server';
-// import clientPromise from '../../../lib/mongodb.js';
-// import { verifyToken } from '../../../lib/auth.js';
-// import { ObjectId } from 'mongodb';
-
-// export async function GET(request) {
-//   try {
-//     const token = request.cookies.get('token')?.value;
-    
-//     if (!token) {
-//       return NextResponse.json(
-//         { error: 'Not authenticated' },
-//         { status: 401 }
-//       );
-//     }
-
-//     const decoded = verifyToken(token);
-//     const { searchParams } = new URL(request.url);
-    
-//     // Pagination parameters
-//     const page = parseInt(searchParams.get('page') || '1');
-//     const limit = parseInt(searchParams.get('limit') || '20');
-//     const skip = (page - 1) * limit;
-    
-//     // Filter parameters
-//     const aliasFilter = searchParams.get('alias');
-//     const unreadOnly = searchParams.get('unread') === 'true';
-
-//     const client = await clientPromise;
-//     const db = client.db();
-
-//     // Build query
-//     const query = { userId: new ObjectId(decoded.userId) };
-    
-//     if (aliasFilter) {
-//       query.aliasEmail = aliasFilter;
-//     }
-    
-//     if (unreadOnly) {
-//       query.isRead = false;
-//     }
-
-//     // Get emails with pagination
-//     const emails = await db.collection('inbox')
-//       .find(query)
-//       .sort({ receivedAt: -1 })
-//       .skip(skip)
-//       .limit(limit)
-//       .toArray();
-
-//     // Get total count for pagination
-//     const totalCount = await db.collection('inbox').countDocuments(query);
-//     const totalPages = Math.ceil(totalCount / limit);
-
-//     // Get unread count
-//     const unreadCount = await db.collection('inbox').countDocuments({
-//       userId: new ObjectId(decoded.userId),
-//       isRead: false
-//     });
-
-//     return NextResponse.json({
-//       emails,
-//       pagination: {
-//         currentPage: page,
-//         totalPages,
-//         totalCount,
-//         hasNext: page < totalPages,
-//         hasPrev: page > 1
-//       },
-//       unreadCount
-//     });
-
-//   } catch (error) {
-//     console.error('Get inbox error:', error);
-    
-//     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-//       return NextResponse.json(
-//         { error: 'Invalid or expired token' },
-//         { status: 401 }
-//       );
-//     }
-    
-//     return NextResponse.json(
-//       { error: 'Internal server error' },
-//       { status: 500 }
-//     );
-//   }
-// }
-
-
-
-
-
-
-
-
-
-
-
-// app/api/inbox/route.js - CLEAN VERSION
 import { NextResponse } from 'next/server';
 import clientPromise from '../../../lib/mongodb.js';
 import { verifyToken } from '../../../lib/auth.js';
@@ -305,6 +5,8 @@ import { ObjectId } from 'mongodb';
 
 export async function GET(request) {
   try {
+    console.log('=== INBOX API REQUEST ===');
+    
     const token = request.cookies.get('token')?.value;
     
     if (!token) {
@@ -320,44 +22,105 @@ export async function GET(request) {
     const aliasFilter = searchParams.get('alias');
     const unreadOnly = searchParams.get('unread') === 'true';
 
+    console.log('Inbox query params:', {
+      userId: decoded.userId,
+      page,
+      limit,
+      aliasFilter,
+      unreadOnly
+    });
+
     const client = await clientPromise;
     const db = client.db();
 
-    // Build query - try both ObjectId and string userId
-    const query = { 
+    // Fetch user's accessible alias emails (personal + collaborative)
+    const accessibleAliases = await db.collection('aliases').find({
       $or: [
-        { userId: new ObjectId(decoded.userId) },
-        { userId: decoded.userId }
+        { ownerId: new ObjectId(decoded.userId) },
+        { 'collaborators.userId': new ObjectId(decoded.userId) }
+      ]
+    }).toArray();
+
+    const userAliasEmails = accessibleAliases.map(a => a.aliasEmail);
+
+    console.log('User accessible aliases:', userAliasEmails);
+
+    let baseQuery;
+    if (aliasFilter) {
+      // Specific alias - verify access
+      if (!userAliasEmails.includes(aliasFilter)) {
+        return NextResponse.json({ error: 'Unauthorized access to alias' }, { status: 403 });
+      }
+      baseQuery = { aliasEmail: aliasFilter };
+    } else {
+      baseQuery = { aliasEmail: { $in: userAliasEmails } };
+    }
+
+    // Add legacy userId support
+    baseQuery = {
+      $or: [
+        baseQuery,
+        { userId: new ObjectId(decoded.userId) }
       ]
     };
     
-    if (aliasFilter) {
-      query.aliasEmail = aliasFilter;
-    }
-    
     if (unreadOnly) {
-      query.isRead = false;
+      baseQuery.$and = baseQuery.$and || [];
+      baseQuery.$and.push({ isRead: false });
     }
 
-    // Get emails
+    console.log('Database query:', JSON.stringify(baseQuery, null, 2));
+
+    // Get emails with pagination
     const emails = await db.collection('inbox')
-      .find(query)
+      .find(baseQuery)
       .sort({ receivedAt: -1 })
       .skip(skip)
       .limit(limit)
       .toArray();
 
-    // Get counts
-    const totalCount = await db.collection('inbox').countDocuments(query);
+    console.log(`Found ${emails.length} emails`);
+
+    // Get total count for pagination (without unread filter for total)
+    let totalQuery = aliasFilter 
+      ? { aliasEmail: aliasFilter }
+      : { aliasEmail: { $in: userAliasEmails } };
+    totalQuery = {
+      $or: [
+        totalQuery,
+        { userId: new ObjectId(decoded.userId) }
+      ]
+    };
+    const totalCount = await db.collection('inbox').countDocuments(totalQuery);
     const totalPages = Math.ceil(totalCount / limit);
 
-    const unreadCount = await db.collection('inbox').countDocuments({
+    // Get unread count
+    let unreadQuery = aliasFilter 
+      ? { aliasEmail: aliasFilter, isRead: false }
+      : { aliasEmail: { $in: userAliasEmails }, isRead: false };
+    unreadQuery = {
       $or: [
-        { userId: new ObjectId(decoded.userId) },
-        { userId: decoded.userId }
-      ],
-      isRead: false
+        unreadQuery,
+        { userId: new ObjectId(decoded.userId), isRead: false }
+      ]
+    };
+    const unreadCount = await db.collection('inbox').countDocuments(unreadQuery);
+
+    console.log('Inbox stats:', {
+      totalEmails: totalCount,
+      unreadEmails: unreadCount,
+      currentPage: page,
+      totalPages
     });
+
+    // Debug info for troubleshooting
+    const debugInfo = {
+      userId: decoded.userId,
+      userIdType: typeof decoded.userId,
+      userAliasEmails,
+      totalDocsInInbox: await db.collection('inbox').countDocuments({}),
+      sampleDoc: await db.collection('inbox').findOne({}, { projection: { userId: 1, aliasEmail: 1 } })
+    };
 
     return NextResponse.json({
       emails,
@@ -368,11 +131,20 @@ export async function GET(request) {
         hasNext: page < totalPages,
         hasPrev: page > 1
       },
-      unreadCount
+      unreadCount,
+      debug: debugInfo
     });
 
   } catch (error) {
     console.error('Inbox API error:', error);
-    return NextResponse.json({ error: 'Server error' }, { status: 500 });
+    
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
+    }
+    
+    return NextResponse.json({ 
+      error: 'Server error', 
+      details: error.message 
+    }, { status: 500 });
   }
 }
