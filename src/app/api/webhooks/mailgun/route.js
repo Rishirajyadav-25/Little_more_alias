@@ -1,5 +1,17 @@
-// ===== 2. Update your Mailgun webhook to handle reverse aliases =====
-// app/api/webhooks/mailgun/route.js - UPDATED to handle reverse aliases
+// ===== 2. Update your Mailgun webhook to handle reverse aliases and spam filtering =====
+// app/api/webhooks/mailgun/route.js - UPDATED to handle reverse aliases and spam filtering
+
+import { NextResponse } from 'next/server';
+import clientPromise from '@/lib/mongodb';
+import { ObjectId } from 'mongodb';
+import Mailgun from 'mailgun.js';
+import FormData from 'form-data';
+
+const mailgun = new Mailgun(FormData);
+const mg = mailgun.client({
+  username: 'api',
+  key: process.env.MAILGUN_API_KEY,
+});
 
 export async function POST(request) {
   try {
@@ -146,11 +158,8 @@ async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain
   });
 }
 
-// Handle normal alias emails (existing functionality)
+// Handle normal alias emails with spam filtering
 async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain, bodyHtml, messageId) {
-  // Your existing normal alias handling code here
-  // (the code that was already in your webhook)
-  
   const alias = await db.collection('aliases').findOne({
     $and: [
       {
@@ -185,6 +194,50 @@ async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain,
     return NextResponse.json({ message: 'No user found' }, { status: 200 });
   }
 
+  // Get user's spam settings
+  const spamSettings = user.spamSettings || {
+    enabled: true,
+    sensitivity: 'medium',
+    autoDelete: false,
+    notifications: true
+  };
+
+  // Perform spam classification if enabled
+  let spamResult = null;
+  let shouldDeliver = true;
+  let spamAction = 'none';
+
+  if (spamSettings.enabled) {
+    try {
+      const spamResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/spam/classify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: bodyPlain, 
+          subject: subject, 
+          sender: sender 
+        })
+      });
+
+      if (spamResponse.ok) {
+        spamResult = await spamResponse.json();
+        
+        // Apply spam filtering based on settings
+        const threshold = spamSettings.sensitivity === 'low' ? 0.8 : 
+                         spamSettings.sensitivity === 'high' ? 0.6 : 0.7;
+        
+        if (spamResult.isSpam && spamResult.confidence >= threshold) {
+          shouldDeliver = !spamSettings.autoDelete;
+          spamAction = spamSettings.autoDelete ? 'delete' : 'quarantine';
+          console.log(`Spam detected for ${recipient}: ${spamResult.reason}`);
+        }
+      }
+    } catch (spamError) {
+      console.error('Spam classification error:', spamError);
+      // Continue processing if spam classification fails
+    }
+  }
+
   const emailDoc = {
     aliasId: alias._id,
     userId: alias.userId,
@@ -199,39 +252,77 @@ async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain,
     isForwarded: false,
     isReverseAlias: false,
     receivedAt: new Date(),
-    messageId: messageId
+    messageId: messageId,
+    // Spam classification data
+    isSpam: spamResult?.isSpam || false,
+    spamConfidence: spamResult?.confidence || 0,
+    spamReason: spamResult?.reason || '',
+    spamAction: spamAction,
+    delivered: shouldDeliver
   };
 
   const result = await db.collection('inbox').insertOne(emailDoc);
 
-  // Forward to user's real email
-  try {
-    await mg.messages.create(process.env.MAILGUN_DOMAIN, {
-      from: `${alias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
-      to: user.email,
-      subject: `[${alias.aliasEmail}] ${subject}`,
-      text: `Forwarded from: ${alias.aliasEmail}\nOriginal sender: ${sender}\n\n${bodyPlain}`,
-      html: bodyHtml ? `
-        <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
-          <p><strong>Forwarded from:</strong> ${alias.aliasEmail}</p>
-          <p><strong>Original sender:</strong> ${sender}</p>
-        </div>
-        ${bodyHtml}
-      ` : undefined,
-      'h:Reply-To': sender
-    });
+  // Only forward if not blocked by spam filter
+  if (shouldDeliver) {
+    try {
+      await mg.messages.create(process.env.MAILGUN_DOMAIN, {
+        from: `${alias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
+        to: user.email,
+        subject: `[${alias.aliasEmail}] ${subject}`,
+        text: `Forwarded from: ${alias.aliasEmail}\nOriginal sender: ${sender}\n\n${bodyPlain}`,
+        html: bodyHtml ? `
+          <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
+            <p><strong>Forwarded from:</strong> ${alias.aliasEmail}</p>
+            <p><strong>Original sender:</strong> ${sender}</p>
+          </div>
+          ${bodyHtml}
+        ` : undefined,
+        'h:Reply-To': sender
+      });
 
-    await db.collection('inbox').updateOne(
-      { _id: result.insertedId },
-      { $set: { isForwarded: true, forwardedAt: new Date() } }
-    );
+      await db.collection('inbox').updateOne(
+        { _id: result.insertedId },
+        { $set: { isForwarded: true, forwardedAt: new Date() } }
+      );
 
-  } catch (forwardError) {
-    console.error('Forward error:', forwardError.message);
+    } catch (forwardError) {
+      console.error('Forward error:', forwardError.message);
+    }
+  } else {
+    console.log(`Email blocked due to spam: ${spamResult?.reason}`);
+    
+    // Send notification if enabled
+    if (spamSettings.notifications && spamAction !== 'delete') {
+      try {
+        await mg.messages.create(process.env.MAILGUN_DOMAIN, {
+          from: `Spam Filter <noreply@${process.env.MAILGUN_DOMAIN}>`,
+          to: user.email,
+          subject: `Spam Email Blocked for ${alias.aliasEmail}`,
+          text: `A potential spam email was blocked for your alias ${alias.aliasEmail}.\n\nFrom: ${sender}\nSubject: ${subject}\nReason: ${spamResult?.reason}\n\nYou can view and manage spam settings in your dashboard.`,
+          html: `
+            <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+              <h3 style="color: #dc2626; margin: 0 0 8px 0;">🚫 Spam Email Blocked</h3>
+              <p style="margin: 0; color: #7f1d1d;">A potential spam email was blocked for your alias <strong>${alias.aliasEmail}</strong>.</p>
+            </div>
+            <div style="background: #f9fafb; padding: 12px; border-radius: 6px;">
+              <p><strong>From:</strong> ${sender}</p>
+              <p><strong>Subject:</strong> ${subject}</p>
+              <p><strong>Reason:</strong> ${spamResult?.reason}</p>
+            </div>
+            <p style="margin-top: 16px; color: #6b7280;">You can view and manage spam settings in your dashboard.</p>
+          `
+        });
+      } catch (notificationError) {
+        console.error('Notification error:', notificationError.message);
+      }
+    }
   }
 
   return NextResponse.json({ 
-    message: 'Email processed successfully',
-    emailId: result.insertedId.toString()
+    message: shouldDeliver ? 'Email processed successfully' : 'Email blocked as spam',
+    emailId: result.insertedId.toString(),
+    spamDetected: spamResult?.isSpam || false,
+    spamAction: spamAction
   });
 }

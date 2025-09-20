@@ -19,6 +19,27 @@ export default function Dashboard() {
   const [toggleLoading, setToggleLoading] = useState({});
   const [activeTab, setActiveTab] = useState('aliases');
   const [managingAliasId, setManagingAliasId] = useState(null);
+  const [spamSettings, setSpamSettings] = useState({
+    enabled: true,
+    sensitivity: 'medium',
+    autoDelete: false,
+    quarantineFolder: 'spam',
+    whitelist: [],
+    blacklist: [],
+    notifications: true
+  });
+  const [spamStats, setSpamStats] = useState({
+    totalEmails: 0,
+    spamEmails: 0,
+    hamEmails: 0,
+    falsePositives: 0,
+    falseNegatives: 0,
+    accuracy: 100,
+    recentSpam: [],
+    spamByAlias: []
+  });
+  const [spamTestText, setSpamTestText] = useState('');
+  const [spamTestResult, setSpamTestResult] = useState(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -27,6 +48,8 @@ export default function Dashboard() {
     fetchInboxStats();
     fetchReverseAliases();
     fetchActivities();
+    fetchSpamSettings();
+    fetchSpamStats();
   }, []);
 
   const fetchUserData = async () => {
@@ -285,6 +308,74 @@ export default function Dashboard() {
     }
   };
 
+  const fetchSpamSettings = async () => {
+    try {
+      const response = await fetch('/api/spam/settings');
+      if (response.ok) {
+        const settings = await response.json();
+        setSpamSettings(settings);
+      }
+    } catch (error) {
+      console.error('Error fetching spam settings:', error);
+    }
+  };
+
+  const fetchSpamStats = async () => {
+    try {
+      const response = await fetch('/api/spam/stats');
+      if (response.ok) {
+        const stats = await response.json();
+        setSpamStats(stats);
+      }
+    } catch (error) {
+      console.error('Error fetching spam stats:', error);
+    }
+  };
+
+  const updateSpamSettings = async (newSettings) => {
+    try {
+      const response = await fetch('/api/spam/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSettings)
+      });
+
+      if (response.ok) {
+        setSpamSettings(newSettings);
+        setSuccess('Spam settings updated successfully!');
+      } else {
+        const data = await response.json();
+        setError(data.error || 'Failed to update spam settings');
+      }
+    } catch (error) {
+      setError('Network error. Please try again.');
+    }
+  };
+
+  const testSpamClassification = async () => {
+    if (!spamTestText.trim()) {
+      setError('Please enter some text to test');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/spam/classify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: spamTestText })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setSpamTestResult(result);
+      } else {
+        setError('Failed to classify text');
+      }
+    } catch (error) {
+      setError('Network error. Please try again.');
+    }
+  };
+
   const getActivityText = (act) => {
     switch (act.type) {
       case 'sent':
@@ -438,6 +529,21 @@ export default function Dashboard() {
                 } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
               >
                 Reverse Aliases
+              </button>
+              <button
+                onClick={() => setActiveTab('spam')}
+                className={`${
+                  activeTab === 'spam'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Spam Filtering
+                {spamStats.spamEmails > 0 && (
+                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    {spamStats.spamEmails}
+                  </span>
+                )}
               </button>
             </nav>
           </div>
@@ -892,6 +998,213 @@ export default function Dashboard() {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* Spam Filtering Tab */}
+        {activeTab === 'spam' && (
+          <div className="space-y-8">
+            {/* Spam Statistics */}
+            <div className="bg-white rounded-lg shadow-sm border">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">Spam Statistics</h3>
+              </div>
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-gray-900">{spamStats.totalEmails}</div>
+                    <div className="text-sm text-gray-500">Total Emails</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-red-600">{spamStats.spamEmails}</div>
+                    <div className="text-sm text-gray-500">Spam Detected</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-green-600">{spamStats.hamEmails}</div>
+                    <div className="text-sm text-gray-500">Legitimate</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-blue-600">{spamStats.accuracy}%</div>
+                    <div className="text-sm text-gray-500">Accuracy</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Spam Settings */}
+            <div className="bg-white rounded-lg shadow-sm border">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">Spam Filter Settings</h3>
+              </div>
+              <div className="p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Enable Spam Filtering</h4>
+                    <p className="text-sm text-gray-500">Automatically detect and filter spam emails</p>
+                  </div>
+                  <button
+                    onClick={() => updateSpamSettings({ ...spamSettings, enabled: !spamSettings.enabled })}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      spamSettings.enabled ? 'bg-blue-600' : 'bg-gray-200'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        spamSettings.enabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-2">Sensitivity Level</label>
+                  <select
+                    value={spamSettings.sensitivity}
+                    onChange={(e) => updateSpamSettings({ ...spamSettings, sensitivity: e.target.value })}
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="low">Low - Only obvious spam</option>
+                    <option value="medium">Medium - Balanced detection</option>
+                    <option value="high">High - Aggressive filtering</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Auto-Delete Spam</h4>
+                    <p className="text-sm text-gray-500">Automatically delete detected spam emails</p>
+                  </div>
+                  <button
+                    onClick={() => updateSpamSettings({ ...spamSettings, autoDelete: !spamSettings.autoDelete })}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      spamSettings.autoDelete ? 'bg-blue-600' : 'bg-gray-200'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        spamSettings.autoDelete ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Notifications</h4>
+                    <p className="text-sm text-gray-500">Get notified when spam is detected</p>
+                  </div>
+                  <button
+                    onClick={() => updateSpamSettings({ ...spamSettings, notifications: !spamSettings.notifications })}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      spamSettings.notifications ? 'bg-blue-600' : 'bg-gray-200'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        spamSettings.notifications ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Spam Test Tool */}
+            <div className="bg-white rounded-lg shadow-sm border">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">Test Spam Classification</h3>
+                <p className="text-sm text-gray-500 mt-1">Test how our spam filter would classify a message</p>
+              </div>
+              <div className="p-6">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Email Content to Test
+                    </label>
+                    <textarea
+                      rows={4}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Enter email subject and content to test spam classification..."
+                      value={spamTestText}
+                      onChange={(e) => setSpamTestText(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={testSpamClassification}
+                    disabled={!spamTestText.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  >
+                    Test Classification
+                  </button>
+                  
+                  {spamTestResult && (
+                    <div className={`p-4 rounded-md border ${
+                      spamTestResult.isSpam 
+                        ? 'bg-red-50 border-red-200' 
+                        : 'bg-green-50 border-green-200'
+                    }`}>
+                      <div className="flex items-center">
+                        <span className={`text-2xl mr-3 ${
+                          spamTestResult.isSpam ? 'text-red-600' : 'text-green-600'
+                        }`}>
+                          {spamTestResult.isSpam ? '🚫' : '✅'}
+                        </span>
+                        <div>
+                          <h4 className={`font-medium ${
+                            spamTestResult.isSpam ? 'text-red-800' : 'text-green-800'
+                          }`}>
+                            {spamTestResult.isSpam ? 'Spam Detected' : 'Legitimate Email'}
+                          </h4>
+                          <p className={`text-sm ${
+                            spamTestResult.isSpam ? 'text-red-700' : 'text-green-700'
+                          }`}>
+                            Confidence: {(spamTestResult.confidence * 100).toFixed(1)}%
+                          </p>
+                          <p className={`text-sm ${
+                            spamTestResult.isSpam ? 'text-red-700' : 'text-green-700'
+                          }`}>
+                            {spamTestResult.reason}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Spam */}
+            {spamStats.recentSpam.length > 0 && (
+              <div className="bg-white rounded-lg shadow-sm border">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <h3 className="text-lg font-medium text-gray-900">Recent Spam Detected</h3>
+                </div>
+                <div className="divide-y divide-gray-200">
+                  {spamStats.recentSpam.map((email) => (
+                    <div key={email.id} className="px-6 py-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {email.subject || 'No Subject'}
+                          </p>
+                          <p className="text-sm text-gray-500 truncate">
+                            From: {email.sender} • To: {email.aliasEmail}
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            {new Date(email.receivedAt).toLocaleString()} • Confidence: {(email.confidence * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                        <div className="flex items-center space-x-2 ml-4">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                            Spam
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
