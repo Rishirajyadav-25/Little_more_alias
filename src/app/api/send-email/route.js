@@ -59,38 +59,43 @@ export async function POST(request) {
       );
     }
 
-    // Create or get reverse alias for this recipient
-    const reverseAliasId = await createReverseAlias(db, alias._id, to, decoded.userId);
+    // Create or get reverse alias for this recipient - FIX: Use the original alias email
+    const reverseAliasId = await createReverseAlias(db, alias._id, to, decoded.userId, from);
 
-    // Send email via Mailgun - NO real email exposed
+    // Send email via Mailgun
     const emailData = {
       from: from, // This shows as the alias email
       to: to,
       subject: subject,
       text: text,
-      // CRITICAL: Use reverse alias instead of real email
-      'h:Reply-To': `${reverseAliasId}@${process.env.MAILGUN_DOMAIN}`,
+      // FIXED: Use the original alias email instead of random reverse alias
+      'h:Reply-To': from, // Recipients will reply to the original alias
       'o:tracking': 'yes'
     };
 
     const response = await mg.messages.create(process.env.MAILGUN_DOMAIN, emailData);
 
-    // Log the sent email
-    await db.collection('sent_emails').insertOne({
-      userId: new ObjectId(decoded.userId),
+    // Log the sent email in inbox for collaborative visibility
+    await db.collection('inbox').insertOne({
       aliasId: alias._id,
+      userId: new ObjectId(decoded.userId),
       aliasEmail: from,
-      reverseAliasId: reverseAliasId,
+      realEmail: (await db.collection('users').findOne({ _id: new ObjectId(decoded.userId) })).email,
+      from: from,
       to: to,
       subject: subject,
-      text: text,
-      mailgunId: response.id,
-      sentAt: new Date()
+      bodyPlain: text,
+      isRead: true,
+      isForwarded: false,
+      isSentEmail: true, // Mark as sent email
+      sentBy: new ObjectId(decoded.userId),
+      receivedAt: new Date(),
+      messageId: response.id
     });
 
     // Update reverse alias usage
     await db.collection('reverse_aliases').updateOne(
-      { _id: reverseAliasId },
+      { reverseId: reverseAliasId },
       { 
         $inc: { emailsSent: 1 },
         $set: { lastUsed: new Date() }
@@ -121,7 +126,7 @@ export async function POST(request) {
     return NextResponse.json({
       message: 'Email sent successfully',
       messageId: response.id,
-      reverseAlias: `${reverseAliasId}@${process.env.MAILGUN_DOMAIN}`
+      reverseAlias: from // Return the original alias instead of reverse alias
     });
   } catch (error) {
     console.error('Send email error:', error);
@@ -132,8 +137,8 @@ export async function POST(request) {
   }
 }
 
-// Helper function to create reverse alias
-async function createReverseAlias(db, aliasId, recipientEmail, userId) {
+// FIXED: Helper function to create reverse alias with original alias email
+async function createReverseAlias(db, aliasId, recipientEmail, userId, originalAliasEmail) {
   // Check if reverse alias already exists for this combination
   let existingReverse = await db.collection('reverse_aliases').findOne({
     aliasId: aliasId,
@@ -147,13 +152,14 @@ async function createReverseAlias(db, aliasId, recipientEmail, userId) {
   // Generate unique reverse alias ID
   const reverseId = generateReverseId();
   
-  // Create new reverse alias
+  // Create new reverse alias with original alias email reference
   const reverseAlias = {
     _id: reverseId,
     reverseId: reverseId,
     aliasId: aliasId,
     userId: new ObjectId(userId),
     recipientEmail: recipientEmail,
+    originalAliasEmail: originalAliasEmail, // Store the original alias email
     emailsSent: 0,
     emailsReceived: 0,
     createdAt: new Date(),
@@ -167,7 +173,6 @@ async function createReverseAlias(db, aliasId, recipientEmail, userId) {
 
 // Generate unique reverse alias ID
 function generateReverseId() {
-  // Format: ra_[8 random chars]_[timestamp]
   const randomPart = crypto.randomBytes(4).toString('hex');
   const timestampPart = Date.now().toString(36).slice(-6);
   return `ra_${randomPart}_${timestampPart}`;

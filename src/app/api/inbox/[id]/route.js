@@ -102,7 +102,7 @@ export async function PATCH(request, { params }) {
     }
 
     const decoded = verifyToken(token);
-    const { id } = params;
+    const { id } = await params;
     const { isRead } = await request.json();
 
     if (!ObjectId.isValid(id)) {

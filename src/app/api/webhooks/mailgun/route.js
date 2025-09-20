@@ -1,5 +1,7 @@
-// ===== 2. Update your Mailgun webhook to handle reverse aliases =====
-// app/api/webhooks/mailgun/route.js - UPDATED to handle reverse aliases
+import { NextResponse } from 'next/server';
+import clientPromise from '../../../../lib/mongodb';
+import { mg } from '../../../../lib/mailgun';
+import { ObjectId } from 'mongodb';
 
 export async function POST(request) {
   try {
@@ -44,7 +46,7 @@ export async function POST(request) {
   }
 }
 
-// Handle emails sent to reverse aliases (replies from recipients)
+// FIXED: Handle emails sent to reverse aliases (replies from recipients)
 async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain, bodyHtml, messageId) {
   console.log('Processing reverse alias email:', reverseId);
 
@@ -59,7 +61,7 @@ async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain
     return NextResponse.json({ message: 'Reverse alias not found' }, { status: 200 });
   }
 
-  // Get the original alias
+  // Get the original alias with collaborator info
   const originalAlias = await db.collection('aliases').findOne({
     _id: reverseAlias.aliasId
   });
@@ -69,24 +71,12 @@ async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain
     return NextResponse.json({ message: 'Original alias not found' }, { status: 200 });
   }
 
-  // Get user
-  const user = await db.collection('users').findOne({
-    _id: ObjectId.isValid(originalAlias.userId) ? new ObjectId(originalAlias.userId) : originalAlias.userId
-  });
-
-  if (!user) {
-    console.log('User not found');
-    return NextResponse.json({ message: 'User not found' }, { status: 200 });
-  }
-
-  console.log('Forwarding reverse alias email to user:', user.email);
-
-  // Store in inbox (appears as if sent to the original alias)
+  // Store the reply in inbox for ALL alias members to see
   const emailDoc = {
     aliasId: originalAlias._id,
-    userId: originalAlias.userId,
+    userId: originalAlias.ownerId, // Primary user ID for compatibility
     aliasEmail: originalAlias.aliasEmail,
-    realEmail: user.email,
+    realEmail: originalAlias.realEmail || 'unknown@example.com',
     from: sender,
     to: originalAlias.aliasEmail, // Show as sent to original alias
     subject: subject,
@@ -95,6 +85,7 @@ async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain
     isRead: false,
     isForwarded: false,
     isReverseAlias: true,
+    isReplyToSent: true, // FIXED: Mark as reply to sent email
     reverseAliasId: reverseId,
     receivedAt: new Date(),
     messageId: messageId
@@ -102,55 +93,106 @@ async function handleReverseAliasEmail(db, reverseId, sender, subject, bodyPlain
 
   const result = await db.collection('inbox').insertOne(emailDoc);
 
-  // Forward to user's real email
-  try {
-    await mg.messages.create(process.env.MAILGUN_DOMAIN, {
-      from: `${originalAlias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
-      to: user.email,
-      subject: `[${originalAlias.aliasEmail}] ${subject}`,
-      text: `Reply received via your alias.\nFrom: ${sender}\nTo: ${originalAlias.aliasEmail}\n\n${bodyPlain}`,
-      html: bodyHtml ? `
-        <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
-          <p><strong>Reply received via your alias</strong></p>
-          <p><strong>From:</strong> ${sender}</p>
-          <p><strong>To:</strong> ${originalAlias.aliasEmail}</p>
-        </div>
-        ${bodyHtml}
-      ` : undefined,
-      'h:Reply-To': `${reverseId}@${process.env.MAILGUN_DOMAIN}` // Keep using reverse alias
+  // FIXED: Forward to ALL collaborative alias members, not just owner
+  const forwardToUsers = [];
+  
+  // Add owner
+  const owner = await db.collection('users').findOne({ _id: originalAlias.ownerId });
+  if (owner) {
+    forwardToUsers.push({
+      email: owner.email,
+      name: owner.name,
+      role: 'owner'
     });
-
-    await db.collection('inbox').updateOne(
-      { _id: result.insertedId },
-      { $set: { isForwarded: true, forwardedAt: new Date() } }
-    );
-
-    // Update reverse alias stats
-    await db.collection('reverse_aliases').updateOne(
-      { _id: reverseId },
-      { 
-        $inc: { emailsReceived: 1 },
-        $set: { lastUsed: new Date() }
-      }
-    );
-
-    console.log('Reverse alias email processed successfully');
-    
-  } catch (forwardError) {
-    console.error('Forward error:', forwardError.message);
   }
 
+  // FIXED: Add all collaborators who can receive emails
+  if (originalAlias.isCollaborative && originalAlias.collaborators) {
+    for (const collaborator of originalAlias.collaborators) {
+      const collaboratorUser = await db.collection('users').findOne({ 
+        _id: ObjectId.isValid(collaborator.userId) ? new ObjectId(collaborator.userId) : collaborator.userId 
+      });
+      
+      if (collaboratorUser && (collaborator.role === 'member' || collaborator.role === 'viewer')) {
+        forwardToUsers.push({
+          email: collaboratorUser.email,
+          name: collaboratorUser.name,
+          role: collaborator.role
+        });
+      }
+    }
+  }
+
+  // Forward the reply to all relevant users
+  const forwardPromises = forwardToUsers.map(async (user) => {
+    try {
+      await mg.messages.create(process.env.MAILGUN_DOMAIN, {
+        from: `${originalAlias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
+        to: user.email,
+        subject: `[${originalAlias.aliasEmail}] Reply: ${subject}`,
+        text: `Reply received via your alias from ${reverseAlias.recipientEmail}.\n\nFrom: ${sender}\nTo: ${originalAlias.aliasEmail}\n\n${bodyPlain}`,
+        html: bodyHtml ? `
+          <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
+            <p><strong>Reply received via your alias from ${reverseAlias.recipientEmail}</strong></p>
+            <p><strong>From:</strong> ${sender}</p>
+            <p><strong>To:</strong> ${originalAlias.aliasEmail}</p>
+            <p><strong>Your role:</strong> ${user.role}</p>
+          </div>
+          ${bodyHtml}
+        ` : undefined,
+        'h:Reply-To': originalAlias.aliasEmail // FIXED: Reply to original alias, not reverse
+      });
+      
+      console.log(`Reply forwarded to ${user.email} (${user.role})`);
+    } catch (forwardError) {
+      console.error(`Forward error to ${user.email}:`, forwardError.message);
+    }
+  });
+
+  await Promise.all(forwardPromises);
+
+  // Mark as forwarded
+  await db.collection('inbox').updateOne(
+    { _id: result.insertedId },
+    { $set: { isForwarded: true, forwardedAt: new Date() } }
+  );
+
+  // Update reverse alias stats
+  await db.collection('reverse_aliases').updateOne(
+    { reverseId: reverseId },
+    { 
+      $inc: { emailsReceived: 1 },
+      $set: { lastUsed: new Date() }
+    }
+  );
+
+  // FIXED: Log activity for collaborative alias
+  if (originalAlias.isCollaborative) {
+    await db.collection('shared_activities').insertOne({
+      aliasId: originalAlias._id,
+      type: 'reply_received',
+      userId: originalAlias.ownerId, // System action
+      data: { 
+        from: sender,
+        to: originalAlias.aliasEmail,
+        subject: subject,
+        recipientEmail: reverseAlias.recipientEmail
+      },
+      createdAt: new Date()
+    });
+  }
+
+  console.log('Reverse alias reply processed successfully');
+  
   return NextResponse.json({ 
-    message: 'Reverse alias email processed successfully',
-    emailId: result.insertedId.toString()
+    message: 'Reverse alias reply processed successfully',
+    emailId: result.insertedId.toString(),
+    forwardedToUsers: forwardToUsers.length
   });
 }
 
 // Handle normal alias emails (existing functionality)
 async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain, bodyHtml, messageId) {
-  // Your existing normal alias handling code here
-  // (the code that was already in your webhook)
-  
   const alias = await db.collection('aliases').findOne({
     $and: [
       {
@@ -173,23 +215,12 @@ async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain,
     return NextResponse.json({ message: 'No active alias found' }, { status: 200 });
   }
 
-  let user;
-  if (ObjectId.isValid(alias.userId)) {
-    user = await db.collection('users').findOne({ _id: new ObjectId(alias.userId) });
-  } else {
-    user = await db.collection('users').findOne({ _id: alias.userId });
-  }
-
-  if (!user) {
-    console.log('No user found for alias');
-    return NextResponse.json({ message: 'No user found' }, { status: 200 });
-  }
-
+  // FIXED: Store email in inbox for collaborative visibility
   const emailDoc = {
     aliasId: alias._id,
-    userId: alias.userId,
+    userId: alias.ownerId || alias.userId, // Support both old and new structure
     aliasEmail: recipient,
-    realEmail: user.email,
+    realEmail: alias.realEmail,
     from: sender,
     to: recipient,
     subject: subject,
@@ -198,40 +229,107 @@ async function handleNormalAliasEmail(db, recipient, sender, subject, bodyPlain,
     isRead: false,
     isForwarded: false,
     isReverseAlias: false,
+    isSentEmail: false, // This is a received email
     receivedAt: new Date(),
     messageId: messageId
   };
 
   const result = await db.collection('inbox').insertOne(emailDoc);
 
-  // Forward to user's real email
-  try {
-    await mg.messages.create(process.env.MAILGUN_DOMAIN, {
-      from: `${alias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
-      to: user.email,
-      subject: `[${alias.aliasEmail}] ${subject}`,
-      text: `Forwarded from: ${alias.aliasEmail}\nOriginal sender: ${sender}\n\n${bodyPlain}`,
-      html: bodyHtml ? `
-        <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
-          <p><strong>Forwarded from:</strong> ${alias.aliasEmail}</p>
-          <p><strong>Original sender:</strong> ${sender}</p>
-        </div>
-        ${bodyHtml}
-      ` : undefined,
-      'h:Reply-To': sender
+  // FIXED: Forward to all relevant users (owner + collaborators)
+  const forwardToUsers = [];
+  
+  // Add owner
+  const ownerId = alias.ownerId || alias.userId;
+  let owner;
+  if (ObjectId.isValid(ownerId)) {
+    owner = await db.collection('users').findOne({ _id: new ObjectId(ownerId) });
+  } else {
+    owner = await db.collection('users').findOne({ _id: ownerId });
+  }
+
+  if (owner) {
+    forwardToUsers.push({
+      email: owner.email,
+      name: owner.name,
+      role: 'owner'
     });
+  }
 
-    await db.collection('inbox').updateOne(
-      { _id: result.insertedId },
-      { $set: { isForwarded: true, forwardedAt: new Date() } }
-    );
+  // FIXED: Add collaborators for collaborative aliases
+  if (alias.isCollaborative && alias.collaborators) {
+    for (const collaborator of alias.collaborators) {
+      const collaboratorUser = await db.collection('users').findOne({ 
+        _id: ObjectId.isValid(collaborator.userId) ? new ObjectId(collaborator.userId) : collaborator.userId 
+      });
+      
+      if (collaboratorUser && (collaborator.role === 'member' || collaborator.role === 'viewer')) {
+        forwardToUsers.push({
+          email: collaboratorUser.email,
+          name: collaboratorUser.name,
+          role: collaborator.role
+        });
+      }
+    }
+  }
 
-  } catch (forwardError) {
-    console.error('Forward error:', forwardError.message);
+  // Forward to all relevant users
+  const forwardPromises = forwardToUsers.map(async (user) => {
+    try {
+      await mg.messages.create(process.env.MAILGUN_DOMAIN, {
+        from: `${alias.aliasEmail} <noreply@${process.env.MAILGUN_DOMAIN}>`,
+        to: user.email,
+        subject: `[${alias.aliasEmail}] ${subject}`,
+        text: `Forwarded from: ${alias.aliasEmail}\nOriginal sender: ${sender}\nYour role: ${user.role}\n\n${bodyPlain}`,
+        html: bodyHtml ? `
+          <div style="background: #f3f4f6; padding: 12px; margin-bottom: 16px; border-radius: 6px;">
+            <p><strong>Forwarded from:</strong> ${alias.aliasEmail}</p>
+            <p><strong>Original sender:</strong> ${sender}</p>
+            <p><strong>Your role:</strong> ${user.role}</p>
+          </div>
+          ${bodyHtml}
+        ` : undefined,
+        'h:Reply-To': alias.aliasEmail // FIXED: Reply to alias, not sender
+      });
+      
+      console.log(`Email forwarded to ${user.email} (${user.role})`);
+    } catch (forwardError) {
+      console.error(`Forward error to ${user.email}:`, forwardError.message);
+    }
+  });
+
+  await Promise.all(forwardPromises);
+
+  // Mark as forwarded
+  await db.collection('inbox').updateOne(
+    { _id: result.insertedId },
+    { $set: { isForwarded: true, forwardedAt: new Date() } }
+  );
+
+  // Update alias stats
+  await db.collection('aliases').updateOne(
+    { _id: alias._id },
+    { $inc: { emailsReceived: 1 }, $set: { updatedAt: new Date() } }
+  );
+
+  // FIXED: Log activity for collaborative alias
+  if (alias.isCollaborative) {
+    await db.collection('shared_activities').insertOne({
+      aliasId: alias._id,
+      type: 'received',
+      userId: alias.ownerId || alias.userId,
+      data: { 
+        from: sender,
+        subject: subject,
+        textPreview: bodyPlain.substring(0, 100) + (bodyPlain.length > 100 ? '...' : '')
+      },
+      createdAt: new Date()
+    });
   }
 
   return NextResponse.json({ 
     message: 'Email processed successfully',
-    emailId: result.insertedId.toString()
+    emailId: result.insertedId.toString(),
+    forwardedToUsers: forwardToUsers.length
   });
 }

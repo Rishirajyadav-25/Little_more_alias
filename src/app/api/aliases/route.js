@@ -16,16 +16,65 @@ export async function GET(request) {
     const client = await clientPromise;
     const db = client.db();
     
-    // Fetch all accessible aliases (personal + collaborative where owner or collaborator)
-    const aliases = await db.collection('aliases')
-      .find({ 
-        $or: [
-          { ownerId: new ObjectId(decoded.userId) },
-          { 'collaborators.userId': new ObjectId(decoded.userId) }
-        ] 
-      })
-      .sort({ createdAt: -1 })
-      .toArray();
+    // FIXED: Fetch all accessible aliases with populated collaborator names
+    const aliases = await db.collection('aliases').aggregate([
+      {
+        $match: {
+          $or: [
+            { ownerId: new ObjectId(decoded.userId) },
+            { 'collaborators.userId': new ObjectId(decoded.userId) }
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'ownerId',
+          foreignField: '_id',
+          as: 'owner',
+          pipeline: [{ $project: { name: 1, email: 1 } }]
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'collaborators.userId',
+          foreignField: '_id',
+          as: 'collaboratorUsers',
+          pipeline: [{ $project: { name: 1, email: 1 } }]
+        }
+      },
+      {
+        $addFields: {
+          collaborators: {
+            $map: {
+              input: '$collaborators',
+              as: 'collab',
+              in: {
+                userId: '$$collab.userId',
+                role: '$$collab.role',
+                userDetails: {
+                  $first: {
+                    $filter: {
+                      input: '$collaboratorUsers',
+                      cond: { $eq: ['$$this._id', '$$collab.userId'] }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          collaboratorUsers: 0 // Remove the temporary field
+        }
+      },
+      {
+        $sort: { createdAt: -1 }
+      }
+    ]).toArray();
 
     return NextResponse.json(aliases, { status: 200 });
   } catch (error) {
@@ -248,8 +297,55 @@ export async function PATCH(request) {
         createdAt: new Date()
       });
 
-      // Fetch updated alias
-      const updatedAlias = await db.collection('aliases').findOne({ _id: new ObjectId(aliasId) });
+      // FIXED: Fetch updated alias with populated user details
+      const updatedAlias = await db.collection('aliases').aggregate([
+        { $match: { _id: new ObjectId(aliasId) } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'ownerId',
+            foreignField: '_id',
+            as: 'owner',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'collaborators.userId',
+            foreignField: '_id',
+            as: 'collaboratorUsers',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $addFields: {
+            collaborators: {
+              $map: {
+                input: '$collaborators',
+                as: 'collab',
+                in: {
+                  userId: '$$collab.userId',
+                  role: '$$collab.role',
+                  userDetails: {
+                    $first: {
+                      $filter: {
+                        input: '$collaboratorUsers',
+                        cond: { $eq: ['$$this._id', '$$collab.userId'] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            collaboratorUsers: 0
+          }
+        }
+      ]).next();
 
       return NextResponse.json({
         message: 'Collaborator added successfully',
@@ -302,8 +398,55 @@ export async function PATCH(request) {
         createdAt: new Date()
       });
 
-      // Fetch updated alias
-      const updatedAlias = await db.collection('aliases').findOne({ _id: new ObjectId(aliasId) });
+      // FIXED: Fetch updated alias with populated user details
+      const updatedAlias = await db.collection('aliases').aggregate([
+        { $match: { _id: new ObjectId(aliasId) } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'ownerId',
+            foreignField: '_id',
+            as: 'owner',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'collaborators.userId',
+            foreignField: '_id',
+            as: 'collaboratorUsers',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $addFields: {
+            collaborators: {
+              $map: {
+                input: '$collaborators',
+                as: 'collab',
+                in: {
+                  userId: '$$collab.userId',
+                  role: '$$collab.role',
+                  userDetails: {
+                    $first: {
+                      $filter: {
+                        input: '$collaboratorUsers',
+                        cond: { $eq: ['$$this._id', '$$collab.userId'] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            collaboratorUsers: 0
+          }
+        }
+      ]).next();
 
       return NextResponse.json({
         message: 'Collaborator removed successfully',
@@ -340,10 +483,55 @@ export async function PATCH(request) {
         return NextResponse.json({ error: 'Alias not found or unauthorized' }, { status: 404 });
       }
 
-      // Get updated alias
-      const updatedAlias = await db.collection('aliases').findOne({
-        _id: new ObjectId(aliasId)
-      });
+      // FIXED: Get updated alias with populated user details
+      const updatedAlias = await db.collection('aliases').aggregate([
+        { $match: { _id: new ObjectId(aliasId) } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'ownerId',
+            foreignField: '_id',
+            as: 'owner',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'collaborators.userId',
+            foreignField: '_id',
+            as: 'collaboratorUsers',
+            pipeline: [{ $project: { name: 1, email: 1 } }]
+          }
+        },
+        {
+          $addFields: {
+            collaborators: {
+              $map: {
+                input: '$collaborators',
+                as: 'collab',
+                in: {
+                  userId: '$$collab.userId',
+                  role: '$$collab.role',
+                  userDetails: {
+                    $first: {
+                      $filter: {
+                        input: '$collaboratorUsers',
+                        cond: { $eq: ['$$this._id', '$$collab.userId'] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            collaboratorUsers: 0
+          }
+        }
+      ]).next();
 
       return NextResponse.json({
         message: `Alias ${isActive ? 'activated' : 'deactivated'} successfully`,

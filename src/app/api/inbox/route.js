@@ -21,13 +21,16 @@ export async function GET(request) {
     const skip = (page - 1) * limit;
     const aliasFilter = searchParams.get('alias');
     const unreadOnly = searchParams.get('unread') === 'true';
+    // NEW: Add mailType filter for sent/received
+    const mailType = searchParams.get('type') || 'all'; // 'sent', 'received', 'all'
 
     console.log('Inbox query params:', {
       userId: decoded.userId,
       page,
       limit,
       aliasFilter,
-      unreadOnly
+      unreadOnly,
+      mailType
     });
 
     const client = await clientPromise;
@@ -56,7 +59,22 @@ export async function GET(request) {
       baseQuery = { aliasEmail: { $in: userAliasEmails } };
     }
 
-    // Add legacy userId support
+    // FIXED: Add mail type filtering
+    if (mailType === 'sent') {
+      // Show only sent emails (emails sent BY the user or collaborators)
+      baseQuery.isSentEmail = true;
+    } else if (mailType === 'received') {
+      // Show only received emails (emails sent TO the alias from external sources)
+      baseQuery.$and = baseQuery.$and || [];
+      baseQuery.$and.push({
+        $or: [
+          { isSentEmail: { $exists: false } },
+          { isSentEmail: false }
+        ]
+      });
+    }
+
+    // Add legacy userId support for backward compatibility
     baseQuery = {
       $or: [
         baseQuery,
@@ -71,13 +89,32 @@ export async function GET(request) {
 
     console.log('Database query:', JSON.stringify(baseQuery, null, 2));
 
-    // Get emails with pagination
-    const emails = await db.collection('inbox')
-      .find(baseQuery)
-      .sort({ receivedAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    // Get emails with pagination and populate sender info for sent emails
+    const emails = await db.collection('inbox').aggregate([
+      { $match: baseQuery },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'sentBy',
+          foreignField: '_id',
+          as: 'senderInfo',
+          pipeline: [{ $project: { name: 1, email: 1 } }]
+        }
+      },
+      {
+        $addFields: {
+          senderName: { $first: '$senderInfo.name' }
+        }
+      },
+      {
+        $project: {
+          senderInfo: 0
+        }
+      },
+      { $sort: { receivedAt: -1 } },
+      { $skip: skip },
+      { $limit: limit }
+    ]).toArray();
 
     console.log(`Found ${emails.length} emails`);
 
@@ -85,6 +122,20 @@ export async function GET(request) {
     let totalQuery = aliasFilter 
       ? { aliasEmail: aliasFilter }
       : { aliasEmail: { $in: userAliasEmails } };
+    
+    // Apply mail type filter to total count
+    if (mailType === 'sent') {
+      totalQuery.isSentEmail = true;
+    } else if (mailType === 'received') {
+      totalQuery.$and = totalQuery.$and || [];
+      totalQuery.$and.push({
+        $or: [
+          { isSentEmail: { $exists: false } },
+          { isSentEmail: false }
+        ]
+      });
+    }
+    
     totalQuery = {
       $or: [
         totalQuery,
@@ -94,10 +145,23 @@ export async function GET(request) {
     const totalCount = await db.collection('inbox').countDocuments(totalQuery);
     const totalPages = Math.ceil(totalCount / limit);
 
-    // Get unread count
+    // Get unread count with mail type filter
     let unreadQuery = aliasFilter 
       ? { aliasEmail: aliasFilter, isRead: false }
       : { aliasEmail: { $in: userAliasEmails }, isRead: false };
+    
+    if (mailType === 'sent') {
+      unreadQuery.isSentEmail = true;
+    } else if (mailType === 'received') {
+      unreadQuery.$and = unreadQuery.$and || [];
+      unreadQuery.$and.push({
+        $or: [
+          { isSentEmail: { $exists: false } },
+          { isSentEmail: false }
+        ]
+      });
+    }
+    
     unreadQuery = {
       $or: [
         unreadQuery,
@@ -106,8 +170,37 @@ export async function GET(request) {
     };
     const unreadCount = await db.collection('inbox').countDocuments(unreadQuery);
 
+    // Get counts for different mail types
+    const sentCount = await db.collection('inbox').countDocuments({
+      $or: [
+        { aliasEmail: { $in: userAliasEmails }, isSentEmail: true },
+        { userId: new ObjectId(decoded.userId), isSentEmail: true }
+      ]
+    });
+
+    const receivedCount = await db.collection('inbox').countDocuments({
+      $or: [
+        { 
+          aliasEmail: { $in: userAliasEmails }, 
+          $or: [
+            { isSentEmail: { $exists: false } },
+            { isSentEmail: false }
+          ]
+        },
+        { 
+          userId: new ObjectId(decoded.userId),
+          $or: [
+            { isSentEmail: { $exists: false } },
+            { isSentEmail: false }
+          ]
+        }
+      ]
+    });
+
     console.log('Inbox stats:', {
       totalEmails: totalCount,
+      sentEmails: sentCount,
+      receivedEmails: receivedCount,
       unreadEmails: unreadCount,
       currentPage: page,
       totalPages
@@ -119,7 +212,9 @@ export async function GET(request) {
       userIdType: typeof decoded.userId,
       userAliasEmails,
       totalDocsInInbox: await db.collection('inbox').countDocuments({}),
-      sampleDoc: await db.collection('inbox').findOne({}, { projection: { userId: 1, aliasEmail: 1 } })
+      mailType,
+      sentCount,
+      receivedCount
     };
 
     return NextResponse.json({
@@ -132,6 +227,12 @@ export async function GET(request) {
         hasPrev: page > 1
       },
       unreadCount,
+      counts: {
+        total: totalCount,
+        sent: sentCount,
+        received: receivedCount,
+        unread: unreadCount
+      },
       debug: debugInfo
     });
 

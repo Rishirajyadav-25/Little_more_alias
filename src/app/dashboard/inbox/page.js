@@ -1,3 +1,410 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+
+export default function Inbox() {
+  const [emails, setEmails] = useState([]);
+  const [aliases, setAliases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedAlias, setSelectedAlias] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [pagination, setPagination] = useState({});
+  const [counts, setCounts] = useState({});
+  const [currentPage, setCurrentPage] = useState(1);
+  // NEW: Add mailType state
+  const [mailType, setMailType] = useState('all'); // 'all', 'sent', 'received'
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const aliasParam = searchParams.get('alias');
+    const unreadParam = searchParams.get('unread');
+    const typeParam = searchParams.get('type');
+    if (aliasParam) setSelectedAlias(aliasParam);
+    if (unreadParam === 'true') setUnreadOnly(true);
+    if (typeParam && ['all', 'sent', 'received'].includes(typeParam)) {
+      setMailType(typeParam);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    fetchEmails();
+    fetchAliases();
+  }, [currentPage, selectedAlias, unreadOnly, mailType]);
+
+  const fetchEmails = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: currentPage.toString(),
+        limit: '20'
+      });
+      
+      if (selectedAlias) params.append('alias', selectedAlias);
+      if (unreadOnly) params.append('unread', 'true');
+      if (mailType !== 'all') params.append('type', mailType);
+
+      const response = await fetch(`/api/inbox?${params}`);
+      if (response.ok) {
+        const data = await response.json();
+        setEmails(data.emails || []);
+        setPagination(data.pagination || {});
+        setCounts(data.counts || {});
+      } else if (response.status === 401) {
+        router.push('/signin');
+      }
+    } catch (error) {
+      console.error('Error fetching emails:', error);
+    }
+    setLoading(false);
+  };
+
+  const fetchAliases = async () => {
+    try {
+      const response = await fetch('/api/aliases');
+      if (response.ok) {
+        const data = await response.json();
+        setAliases(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching aliases:', error);
+    }
+  };
+
+  const markAsRead = async (emailId, isRead) => {
+    try {
+      await fetch(`/api/inbox/${emailId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isRead })
+      });
+      fetchEmails();
+    } catch (error) {
+      console.error('Error updating email:', error);
+    }
+  };
+
+  const deleteEmail = async (emailId) => {
+    if (!confirm('Delete this email?')) return;
+    try {
+      await fetch(`/api/inbox/${emailId}`, { method: 'DELETE' });
+      fetchEmails();
+    } catch (error) {
+      console.error('Error deleting email:', error);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffDays = Math.ceil((now - date) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays <= 1) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (diffDays <= 7) return date.toLocaleDateString([], { weekday: 'short' });
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading inbox...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center space-x-4">
+              <Link href="/dashboard" className="text-blue-600 hover:text-blue-700 font-medium">
+                ← Dashboard
+              </Link>
+              <h1 className="text-xl font-semibold text-gray-900">
+                Inbox
+                {counts.unread > 0 && (
+                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    {counts.unread} unread
+                  </span>
+                )}
+              </h1>
+            </div>
+            <div className="flex space-x-3">
+              <button
+                onClick={fetchEmails}
+                className="text-gray-600 hover:text-gray-700 p-2 rounded-md hover:bg-gray-100"
+              >
+                🔄
+              </button>
+              <Link 
+                href="/dashboard/send"
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                Compose
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* NEW: Mail Type Tabs */}
+        <div className="mb-6">
+          <div className="border-b border-gray-200">
+            <nav className="-mb-px flex space-x-8">
+              <button
+                onClick={() => {
+                  setMailType('all');
+                  setCurrentPage(1);
+                }}
+                className={`${
+                  mailType === 'all'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                All ({counts.total || 0})
+              </button>
+              <button
+                onClick={() => {
+                  setMailType('received');
+                  setCurrentPage(1);
+                }}
+                className={`${
+                  mailType === 'received'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Received ({counts.received || 0})
+              </button>
+              <button
+                onClick={() => {
+                  setMailType('sent');
+                  setCurrentPage(1);
+                }}
+                className={`${
+                  mailType === 'sent'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Sent ({counts.sent || 0})
+              </button>
+            </nav>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-lg shadow-sm border mb-6 p-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+            <select
+              value={selectedAlias}
+              onChange={(e) => {
+                setSelectedAlias(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All aliases ({aliases.length})</option>
+              {aliases.map((alias) => (
+                <option key={alias._id} value={alias.aliasEmail}>
+                  {alias.aliasEmail}
+                </option>
+              ))}
+            </select>
+            
+            <label className="flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={unreadOnly}
+                onChange={(e) => {
+                  setUnreadOnly(e.target.checked);
+                  setCurrentPage(1);
+                }}
+                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+              />
+              <span className="ml-2 text-sm text-gray-700">Unread only</span>
+            </label>
+
+            <div className="text-sm text-gray-500 ml-auto">
+              {mailType === 'all' ? 'All emails' : 
+               mailType === 'sent' ? 'Sent emails' : 'Received emails'}: {pagination.totalCount || 0}
+            </div>
+          </div>
+        </div>
+
+        {/* Email List */}
+        <div className="bg-white rounded-lg shadow-sm border">
+          {emails.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <div className="text-6xl mb-4">📪</div>
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                No {mailType === 'all' ? '' : mailType} emails found
+              </h3>
+              <p className="text-gray-500 mb-4">
+                {selectedAlias 
+                  ? `No ${mailType === 'all' ? '' : mailType} emails for ${selectedAlias}`
+                  : `Your ${mailType === 'all' ? '' : mailType} emails will appear here`
+                }
+              </p>
+              <button
+                onClick={fetchEmails}
+                className="text-blue-600 hover:text-blue-700 font-medium"
+              >
+                Refresh inbox
+              </button>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-200">
+              {emails.map((email) => (
+                <div 
+                  key={email._id} 
+                  className={`px-6 py-4 hover:bg-gray-50 cursor-pointer ${
+                    !email.isRead ? 'bg-blue-50 border-l-4 border-blue-400' : ''
+                  }`}
+                  onClick={() => router.push(`/dashboard/inbox/${email._id}`)}
+                >
+                  <div className="flex justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center space-x-3 mb-2">
+                        <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
+                          <span className="text-white text-sm font-medium">
+                            {/* FIXED: Show appropriate initial based on email type */}
+                            {email.isSentEmail 
+                              ? (email.senderName?.charAt(0) || email.from?.charAt(0) || 'S')?.toUpperCase()
+                              : (email.from?.charAt(0) || '?')?.toUpperCase()
+                            }
+                          </span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                            <p className={`text-sm ${!email.isRead ? 'font-semibold' : ''}`}>
+                              {/* FIXED: Display appropriate sender/recipient */}
+                              {email.isSentEmail 
+                                ? `To: ${email.to}` 
+                                : `From: ${email.from || 'Unknown'}`
+                              }
+                            </p>
+                            {!email.isRead && <span className="w-2 h-2 bg-blue-600 rounded-full"></span>}
+                            {email.isSentEmail && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                Sent
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            {email.isSentEmail ? `From: ${email.aliasEmail}` : `To: ${email.aliasEmail}`}
+                          </p>
+                        </div>
+                        <span className="text-xs text-gray-500">{formatDate(email.receivedAt)}</span>
+                      </div>
+                      <div className="ml-11">
+                        <p className={`text-sm mb-1 ${!email.isRead ? 'font-medium' : ''}`}>
+                          {email.subject || '(No Subject)'}
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          {email.bodyPlain?.substring(0, 100) || 'No preview'}...
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-1 ml-4">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markAsRead(email._id, !email.isRead);
+                        }}
+                        className="p-1 text-gray-400 hover:text-gray-600"
+                        title={email.isRead ? 'Mark unread' : 'Mark read'}
+                      >
+                        {email.isRead ? '📭' : '📬'}
+                      </button>
+                      {!email.isSentEmail && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/dashboard/send?reply=${email._id}`);
+                          }}
+                          className="p-1 text-gray-400 hover:text-blue-600"
+                          title="Reply"
+                        >
+                          ↩️
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteEmail(email._id);
+                        }}
+                        className="p-1 text-gray-400 hover:text-red-600"
+                        title="Delete"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {pagination.totalPages > 1 && (
+            <div className="px-6 py-4 border-t flex justify-between items-center">
+              <span className="text-sm text-gray-500">
+                Page {pagination.currentPage} of {pagination.totalPages}
+              </span>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setCurrentPage(prev => prev - 1)}
+                  disabled={!pagination.hasPrev}
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage(prev => prev + 1)}
+                  disabled={!pagination.hasNext}
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // // app/dashboard/inbox/page.js - Main inbox list page
 // 'use client';
 // import { useState, useEffect } from 'react';
@@ -522,305 +929,310 @@
 
 
 
-// app/dashboard/inbox/page.js - CLEAN VERSION
-'use client';
-import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
+// // app/dashboard/inbox/page.js - CLEAN VERSION
+// 'use client';
+// import { useState, useEffect } from 'react';
+// import { useRouter, useSearchParams } from 'next/navigation';
+// import Link from 'next/link';
 
-export default function Inbox() {
-  const [emails, setEmails] = useState([]);
-  const [aliases, setAliases] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedAlias, setSelectedAlias] = useState('');
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [pagination, setPagination] = useState({});
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const router = useRouter();
-  const searchParams = useSearchParams();
+// export default function Inbox() {
+//   const [emails, setEmails] = useState([]);
+//   const [aliases, setAliases] = useState([]);
+//   const [loading, setLoading] = useState(true);
+//   const [selectedAlias, setSelectedAlias] = useState('');
+//   const [unreadOnly, setUnreadOnly] = useState(false);
+//   const [pagination, setPagination] = useState({});
+//   const [unreadCount, setUnreadCount] = useState(0);
+//   const [currentPage, setCurrentPage] = useState(1);
+//   const router = useRouter();
+//   const searchParams = useSearchParams();
 
-  useEffect(() => {
-    const aliasParam = searchParams.get('alias');
-    const unreadParam = searchParams.get('unread');
-    if (aliasParam) setSelectedAlias(aliasParam);
-    if (unreadParam === 'true') setUnreadOnly(true);
-  }, [searchParams]);
+//   useEffect(() => {
+//     const aliasParam = searchParams.get('alias');
+//     const unreadParam = searchParams.get('unread');
+//     if (aliasParam) setSelectedAlias(aliasParam);
+//     if (unreadParam === 'true') setUnreadOnly(true);
+//   }, [searchParams]);
 
-  useEffect(() => {
-    fetchEmails();
-    fetchAliases();
-  }, [currentPage, selectedAlias, unreadOnly]);
+//   useEffect(() => {
+//     fetchEmails();
+//     fetchAliases();
+//   }, [currentPage, selectedAlias, unreadOnly]);
 
-  const fetchEmails = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: '20'
-      });
+//   const fetchEmails = async () => {
+//     setLoading(true);
+//     try {
+//       const params = new URLSearchParams({
+//         page: currentPage.toString(),
+//         limit: '20'
+//       });
       
-      if (selectedAlias) params.append('alias', selectedAlias);
-      if (unreadOnly) params.append('unread', 'true');
+//       if (selectedAlias) params.append('alias', selectedAlias);
+//       if (unreadOnly) params.append('unread', 'true');
 
-      const response = await fetch(`/api/inbox?${params}`);
-      if (response.ok) {
-        const data = await response.json();
-        setEmails(data.emails || []);
-        setPagination(data.pagination || {});
-        setUnreadCount(data.unreadCount || 0);
-      } else if (response.status === 401) {
-        router.push('/signin');
-      }
-    } catch (error) {
-      console.error('Error fetching emails:', error);
-    }
-    setLoading(false);
-  };
+//       const response = await fetch(`/api/inbox?${params}`);
+//       if (response.ok) {
+//         const data = await response.json();
+//         setEmails(data.emails || []);
+//         setPagination(data.pagination || {});
+//         setUnreadCount(data.unreadCount || 0);
+//       } else if (response.status === 401) {
+//         router.push('/signin');
+//       }
+//     } catch (error) {
+//       console.error('Error fetching emails:', error);
+//     }
+//     setLoading(false);
+//   };
 
-  const fetchAliases = async () => {
-    try {
-      const response = await fetch('/api/aliases');
-      if (response.ok) {
-        const data = await response.json();
-        setAliases(data || []);
-      }
-    } catch (error) {
-      console.error('Error fetching aliases:', error);
-    }
-  };
+//   const fetchAliases = async () => {
+//     try {
+//       const response = await fetch('/api/aliases');
+//       if (response.ok) {
+//         const data = await response.json();
+//         setAliases(data || []);
+//       }
+//     } catch (error) {
+//       console.error('Error fetching aliases:', error);
+//     }
+//   };
 
-  const markAsRead = async (emailId, isRead) => {
-    try {
-      await fetch(`/api/inbox/${emailId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isRead })
-      });
-      fetchEmails();
-    } catch (error) {
-      console.error('Error updating email:', error);
-    }
-  };
+//   const markAsRead = async (emailId, isRead) => {
+//     try {
+//       await fetch(`/api/inbox/${emailId}`, {
+//         method: 'PATCH',
+//         headers: { 'Content-Type': 'application/json' },
+//         body: JSON.stringify({ isRead })
+//       });
+//       fetchEmails();
+//     } catch (error) {
+//       console.error('Error updating email:', error);
+//     }
+//   };
 
-  const deleteEmail = async (emailId) => {
-    if (!confirm('Delete this email?')) return;
-    try {
-      await fetch(`/api/inbox/${emailId}`, { method: 'DELETE' });
-      fetchEmails();
-    } catch (error) {
-      console.error('Error deleting email:', error);
-    }
-  };
+//   const deleteEmail = async (emailId) => {
+//     if (!confirm('Delete this email?')) return;
+//     try {
+//       await fetch(`/api/inbox/${emailId}`, { method: 'DELETE' });
+//       fetchEmails();
+//     } catch (error) {
+//       console.error('Error deleting email:', error);
+//     }
+//   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffDays = Math.ceil((now - date) / (1000 * 60 * 60 * 24));
+//   const formatDate = (dateString) => {
+//     const date = new Date(dateString);
+//     const now = new Date();
+//     const diffDays = Math.ceil((now - date) / (1000 * 60 * 60 * 24));
     
-    if (diffDays <= 1) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (diffDays <= 7) return date.toLocaleDateString([], { weekday: 'short' });
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+//     if (diffDays <= 1) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+//     if (diffDays <= 7) return date.toLocaleDateString([], { weekday: 'short' });
+//     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+//   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading inbox...</p>
-        </div>
-      </div>
-    );
-  }
+//   if (loading) {
+//     return (
+//       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+//         <div className="text-center">
+//           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+//           <p className="text-gray-600">Loading inbox...</p>
+//         </div>
+//       </div>
+//     );
+//   }
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard" className="text-blue-600 hover:text-blue-700 font-medium">
-                ← Dashboard
-              </Link>
-              <h1 className="text-xl font-semibold text-gray-900">
-                Inbox
-                {unreadCount > 0 && (
-                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                    {unreadCount} unread
-                  </span>
-                )}
-              </h1>
-            </div>
-            <div className="flex space-x-3">
-              <button
-                onClick={fetchEmails}
-                className="text-gray-600 hover:text-gray-700 p-2 rounded-md hover:bg-gray-100"
-              >
-                🔄
-              </button>
-              <Link 
-                href="/dashboard/send"
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-              >
-                Compose
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
+//   return (
+//     <div className="min-h-screen bg-gray-50">
+//       {/* Header */}
+//       <div className="bg-white shadow-sm border-b">
+//         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+//           <div className="flex items-center justify-between h-16">
+//             <div className="flex items-center space-x-4">
+//               <Link href="/dashboard" className="text-blue-600 hover:text-blue-700 font-medium">
+//                 ← Dashboard
+//               </Link>
+//               <h1 className="text-xl font-semibold text-gray-900">
+//                 Inbox
+//                 {unreadCount > 0 && (
+//                   <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+//                     {unreadCount} unread
+//                   </span>
+//                 )}
+//               </h1>
+//             </div>
+//             <div className="flex space-x-3">
+//               <button
+//                 onClick={fetchEmails}
+//                 className="text-gray-600 hover:text-gray-700 p-2 rounded-md hover:bg-gray-100"
+//               >
+//                 🔄
+//               </button>
+//               <Link 
+//                 href="/dashboard/send"
+//                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+//               >
+//                 Compose
+//               </Link>
+//             </div>
+//           </div>
+//         </div>
+//       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Filters */}
-        <div className="bg-white rounded-lg shadow-sm border mb-6 p-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-            <select
-              value={selectedAlias}
-              onChange={(e) => {
-                setSelectedAlias(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="">All aliases ({aliases.length})</option>
-              {aliases.map((alias) => (
-                <option key={alias._id} value={alias.aliasEmail}>
-                  {alias.aliasEmail}
-                </option>
-              ))}
-            </select>
+//       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+//         {/* Filters */}
+//         <div className="bg-white rounded-lg shadow-sm border mb-6 p-4">
+//           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+//             <select
+//               value={selectedAlias}
+//               onChange={(e) => {
+//                 setSelectedAlias(e.target.value);
+//                 setCurrentPage(1);
+//               }}
+//               className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+//             >
+//               <option value="">All aliases ({aliases.length})</option>
+//               {aliases.map((alias) => (
+//                 <option key={alias._id} value={alias.aliasEmail}>
+//                   {alias.aliasEmail}
+//                 </option>
+//               ))}
+//             </select>
             
-            <label className="flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={unreadOnly}
-                onChange={(e) => {
-                  setUnreadOnly(e.target.checked);
-                  setCurrentPage(1);
-                }}
-                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-              />
-              <span className="ml-2 text-sm text-gray-700">Unread only</span>
-            </label>
+//             <label className="flex items-center cursor-pointer">
+//               <input
+//                 type="checkbox"
+//                 checked={unreadOnly}
+//                 onChange={(e) => {
+//                   setUnreadOnly(e.target.checked);
+//                   setCurrentPage(1);
+//                 }}
+//                 className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+//               />
+//               <span className="ml-2 text-sm text-gray-700">Unread only</span>
+//             </label>
 
-            <div className="text-sm text-gray-500 ml-auto">
-              {pagination.totalCount || 0} emails
-            </div>
-          </div>
-        </div>
+//             <div className="text-sm text-gray-500 ml-auto">
+//               {pagination.totalCount || 0} emails
+//             </div>
+//           </div>
+//         </div>
 
-        {/* Email List */}
-        <div className="bg-white rounded-lg shadow-sm border">
-          {emails.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <div className="text-6xl mb-4">📪</div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
-              <p className="text-gray-500 mb-4">
-                {selectedAlias 
-                  ? `No emails for ${selectedAlias}`
-                  : 'Your received emails will appear here'
-                }
-              </p>
-              <button
-                onClick={fetchEmails}
-                className="text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Refresh inbox
-              </button>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-200">
-              {emails.map((email) => (
-                <div 
-                  key={email._id} 
-                  className={`px-6 py-4 hover:bg-gray-50 cursor-pointer ${
-                    !email.isRead ? 'bg-blue-50 border-l-4 border-blue-400' : ''
-                  }`}
-                  onClick={() => router.push(`/dashboard/inbox/${email._id}`)}
-                >
-                  <div className="flex justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center space-x-3 mb-2">
-                        <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-medium">
-                            {email.from?.charAt(0)?.toUpperCase() || '?'}
-                          </span>
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2">
-                            <p className={`text-sm ${!email.isRead ? 'font-semibold' : ''}`}>
-                              {email.from || 'Unknown'}
-                            </p>
-                            {!email.isRead && <span className="w-2 h-2 bg-blue-600 rounded-full"></span>}
-                          </div>
-                          <p className="text-xs text-gray-500">To: {email.aliasEmail}</p>
-                        </div>
-                        <span className="text-xs text-gray-500">{formatDate(email.receivedAt)}</span>
-                      </div>
-                      <div className="ml-11">
-                        <p className={`text-sm mb-1 ${!email.isRead ? 'font-medium' : ''}`}>
-                          {email.subject || '(No Subject)'}
-                        </p>
-                        <p className="text-sm text-gray-600">
-                          {email.bodyPlain?.substring(0, 100) || 'No preview'}...
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-1 ml-4">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markAsRead(email._id, !email.isRead);
-                        }}
-                        className="p-1 text-gray-400 hover:text-gray-600"
-                        title={email.isRead ? 'Mark unread' : 'Mark read'}
-                      >
-                        {email.isRead ? '📭' : '📬'}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteEmail(email._id);
-                        }}
-                        className="p-1 text-gray-400 hover:text-red-600"
-                        title="Delete"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+//         {/* Email List */}
+//         <div className="bg-white rounded-lg shadow-sm border">
+//           {emails.length === 0 ? (
+//             <div className="px-6 py-12 text-center">
+//               <div className="text-6xl mb-4">📪</div>
+//               <h3 className="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
+//               <p className="text-gray-500 mb-4">
+//                 {selectedAlias 
+//                   ? `No emails for ${selectedAlias}`
+//                   : 'Your received emails will appear here'
+//                 }
+//               </p>
+//               <button
+//                 onClick={fetchEmails}
+//                 className="text-blue-600 hover:text-blue-700 font-medium"
+//               >
+//                 Refresh inbox
+//               </button>
+//             </div>
+//           ) : (
+//             <div className="divide-y divide-gray-200">
+//               {emails.map((email) => (
+//                 <div 
+//                   key={email._id} 
+//                   className={`px-6 py-4 hover:bg-gray-50 cursor-pointer ${
+//                     !email.isRead ? 'bg-blue-50 border-l-4 border-blue-400' : ''
+//                   }`}
+//                   onClick={() => router.push(`/dashboard/inbox/${email._id}`)}
+//                 >
+//                   <div className="flex justify-between">
+//                     <div className="flex-1 min-w-0">
+//                       <div className="flex items-center space-x-3 mb-2">
+//                         <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
+//                           <span className="text-white text-sm font-medium">
+//                             {email.from?.charAt(0)?.toUpperCase() || '?'}
+//                           </span>
+//                         </div>
+//                         <div className="flex-1">
+//                           <div className="flex items-center space-x-2">
+//                             <p className={`text-sm ${!email.isRead ? 'font-semibold' : ''}`}>
+//                               {email.from || 'Unknown'}
+//                             </p>
+//                             {!email.isRead && <span className="w-2 h-2 bg-blue-600 rounded-full"></span>}
+//                           </div>
+//                           <p className="text-xs text-gray-500">To: {email.aliasEmail}</p>
+//                         </div>
+//                         <span className="text-xs text-gray-500">{formatDate(email.receivedAt)}</span>
+//                       </div>
+//                       <div className="ml-11">
+//                         <p className={`text-sm mb-1 ${!email.isRead ? 'font-medium' : ''}`}>
+//                           {email.subject || '(No Subject)'}
+//                         </p>
+//                         <p className="text-sm text-gray-600">
+//                           {email.bodyPlain?.substring(0, 100) || 'No preview'}...
+//                         </p>
+//                       </div>
+//                     </div>
+//                     <div className="flex items-center space-x-1 ml-4">
+//                       <button
+//                         onClick={(e) => {
+//                           e.stopPropagation();
+//                           markAsRead(email._id, !email.isRead);
+//                         }}
+//                         className="p-1 text-gray-400 hover:text-gray-600"
+//                         title={email.isRead ? 'Mark unread' : 'Mark read'}
+//                       >
+//                         {email.isRead ? '📭' : '📬'}
+//                       </button>
+//                       <button
+//                         onClick={(e) => {
+//                           e.stopPropagation();
+//                           deleteEmail(email._id);
+//                         }}
+//                         className="p-1 text-gray-400 hover:text-red-600"
+//                         title="Delete"
+//                       >
+//                         🗑️
+//                       </button>
+//                     </div>
+//                   </div>
+//                 </div>
+//               ))}
+//             </div>
+//           )}
 
-          {/* Pagination */}
-          {pagination.totalPages > 1 && (
-            <div className="px-6 py-4 border-t flex justify-between items-center">
-              <span className="text-sm text-gray-500">
-                Page {pagination.currentPage} of {pagination.totalPages}
-              </span>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setCurrentPage(prev => prev - 1)}
-                  disabled={!pagination.hasPrev}
-                  className="px-3 py-1 border rounded disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage(prev => prev + 1)}
-                  disabled={!pagination.hasNext}
-                  className="px-3 py-1 border rounded disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+//           {/* Pagination */}
+//           {pagination.totalPages > 1 && (
+//             <div className="px-6 py-4 border-t flex justify-between items-center">
+//               <span className="text-sm text-gray-500">
+//                 Page {pagination.currentPage} of {pagination.totalPages}
+//               </span>
+//               <div className="flex space-x-2">
+//                 <button
+//                   onClick={() => setCurrentPage(prev => prev - 1)}
+//                   disabled={!pagination.hasPrev}
+//                   className="px-3 py-1 border rounded disabled:opacity-50"
+//                 >
+//                   Previous
+//                 </button>
+//                 <button
+//                   onClick={() => setCurrentPage(prev => prev + 1)}
+//                   disabled={!pagination.hasNext}
+//                   className="px-3 py-1 border rounded disabled:opacity-50"
+//                 >
+//                   Next
+//                 </button>
+//               </div>
+//             </div>
+//           )}
+//         </div>
+//       </div>
+//     </div>
+//   );
+// }
+
+
+
+
+
