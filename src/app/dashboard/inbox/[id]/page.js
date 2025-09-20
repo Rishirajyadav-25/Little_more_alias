@@ -1,4 +1,4 @@
-// app/dashboard/inbox/[id]/page.js - Individual email view page
+// app/dashboard/inbox/[id]/page.js - Fixed collaborative reply permissions
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
@@ -6,6 +6,8 @@ import Link from 'next/link';
 
 export default function EmailView() {
   const [email, setEmail] = useState(null);
+  const [user, setUser] = useState(null); // FIXED: Add user state
+  const [alias, setAlias] = useState(null); // FIXED: Add alias state for permission checking
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const router = useRouter();
@@ -24,6 +26,39 @@ export default function EmailView() {
     }
   }, [params.id]);
 
+  // FIXED: Fetch user data
+  const fetchUser = useCallback(async () => {
+    try {
+      const response = await fetch('/api/user');
+      if (response.ok) {
+        const userData = await response.json();
+        setUser(userData);
+        return userData;
+      }
+    } catch (err) {
+      console.error('Error fetching user:', err);
+    }
+    return null;
+  }, []);
+
+  // FIXED: Fetch alias data for permission checking
+  const fetchAlias = useCallback(async (aliasEmail) => {
+    if (!aliasEmail) return null;
+    
+    try {
+      const response = await fetch('/api/aliases');
+      if (response.ok) {
+        const aliases = await response.json();
+        const foundAlias = aliases.find(a => a.aliasEmail === aliasEmail);
+        setAlias(foundAlias);
+        return foundAlias;
+      }
+    } catch (err) {
+      console.error('Error fetching alias:', err);
+    }
+    return null;
+  }, []);
+
   // Fetch email details
   const fetchEmail = useCallback(async () => {
     if (!params.id) {
@@ -34,12 +69,21 @@ export default function EmailView() {
 
     try {
       console.log('Fetching email with ID:', params.id);
+      
+      // FIXED: Fetch user first, then email, then alias
+      const userData = await fetchUser();
+      
       const response = await fetch(`/api/inbox/${params.id}`);
       
       if (response.ok) {
         const emailData = await response.json();
         console.log('Email data received:', emailData);
         setEmail(emailData);
+
+        // FIXED: Fetch alias data for permission checking
+        if (emailData.aliasEmail) {
+          await fetchAlias(emailData.aliasEmail);
+        }
 
         // Mark unread emails as read
         if (!emailData.isRead) {
@@ -58,7 +102,7 @@ export default function EmailView() {
       setError('Network error while loading email. Please check your connection.');
     }
     setLoading(false);
-  }, [params.id, router, markAsRead]);
+  }, [params.id, router, markAsRead, fetchUser, fetchAlias]);
 
   // Fetch on mount/id change
   useEffect(() => {
@@ -98,6 +142,32 @@ export default function EmailView() {
     });
   };
 
+  // FIXED: Check if user can reply to this email
+  const canUserReply = () => {
+    if (!email || !user || !alias) return false;
+    
+    // Don't allow reply to sent emails
+    if (email.isSentEmail) return false;
+    
+    // For personal aliases, owner can always reply
+    if (!alias.isCollaborative) {
+      return alias.ownerId?.toString() === user._id?.toString();
+    }
+    
+    // For collaborative aliases
+    if (alias.ownerId?.toString() === user._id?.toString()) {
+      return true; // Owner can always reply
+    }
+    
+    // Check collaborator permissions
+    const collaborator = alias.collaborators?.find(
+      c => c.userId?.toString() === user._id?.toString()
+    );
+    
+    // Members can reply, viewers cannot
+    return collaborator && collaborator.role === 'member';
+  };
+
   // FIXED: Determine email type and display properties
   const getEmailDisplayInfo = () => {
     if (!email) return {};
@@ -116,8 +186,23 @@ export default function EmailView() {
       avatarLetter: isSentEmail ? 
         (email.to?.charAt(0) || 'T') : 
         (email.from?.charAt(0) || 'F'),
-      canReply: !isSentEmail // Only allow reply on received emails
+      canReply: canUserReply() // FIXED: Use proper permission check
     };
+  };
+
+  // FIXED: Get user role in collaborative alias
+  const getUserRole = () => {
+    if (!user || !alias) return null;
+    
+    if (alias.ownerId?.toString() === user._id?.toString()) {
+      return 'owner';
+    }
+    
+    const collaborator = alias.collaborators?.find(
+      c => c.userId?.toString() === user._id?.toString()
+    );
+    
+    return collaborator ? collaborator.role : null;
   };
 
   // Loading state
@@ -180,6 +265,7 @@ export default function EmailView() {
   }
 
   const displayInfo = getEmailDisplayInfo();
+  const userRole = getUserRole();
 
   // Email view
   return (
@@ -199,7 +285,7 @@ export default function EmailView() {
               <h1 className="text-xl font-semibold text-gray-900 truncate">
                 {email.subject || '(No Subject)'}
               </h1>
-              {/* FIXED: Email type badge */}
+              {/* Email type badge */}
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                 displayInfo.isSentEmail 
                   ? 'bg-blue-100 text-blue-800'
@@ -209,6 +295,12 @@ export default function EmailView() {
               }`}>
                 {displayInfo.emailType}
               </span>
+              {/* FIXED: Show user role for collaborative aliases */}
+              {alias?.isCollaborative && userRole && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                  {userRole}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -221,7 +313,7 @@ export default function EmailView() {
           <div className="px-6 py-6 border-b border-gray-200">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-start space-x-4">
-                {/* FIXED: Avatar with appropriate letter */}
+                {/* Avatar with appropriate letter */}
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
                   displayInfo.isSentEmail 
                     ? 'bg-gradient-to-br from-blue-400 to-blue-600'
@@ -240,7 +332,7 @@ export default function EmailView() {
                     {email.subject || '(No Subject)'}
                   </h2>
                   <div className="space-y-1 text-sm text-gray-600">
-                    {/* FIXED: Dynamic From/To display based on email type */}
+                    {/* Dynamic From/To display based on email type */}
                     <div>
                       <span className="font-medium text-gray-700">From:</span> {displayInfo.displayFrom || 'Unknown'}
                     </div>
@@ -251,17 +343,26 @@ export default function EmailView() {
                       <span className="font-medium text-gray-700">Date:</span>{' '}
                       {email.receivedAt ? formatFullDate(email.receivedAt) : 'Unknown'}
                     </div>
-                    {/* FIXED: Show sender info for sent emails */}
+                    {/* Show sender info for sent emails */}
                     {displayInfo.isSentEmail && email.senderName && (
                       <div>
                         <span className="font-medium text-gray-700">Sent by:</span> {email.senderName}
                       </div>
                     )}
-                    {/* FIXED: Show if this is a collaborative alias email */}
-                    {email.isCollaborative && (
+                    {/* Show if this is a collaborative alias email */}
+                    {alias?.isCollaborative && (
                       <div>
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                           Collaborative Alias
+                        </span>
+                      </div>
+                    )}
+                    {/* FIXED: Show permission info for collaborative aliases */}
+                    {alias?.isCollaborative && userRole && (
+                      <div>
+                        <span className="text-xs text-gray-500">
+                          Your role: {userRole} 
+                          {userRole === 'member' ? ' (can reply)' : userRole === 'viewer' ? ' (view only)' : ' (full access)'}
                         </span>
                       </div>
                     )}
@@ -283,15 +384,21 @@ export default function EmailView() {
                 </div>
               </div>
 
-              {/* FIXED: Actions - only show reply for received emails */}
+              {/* FIXED: Actions with proper collaborative permissions */}
               <div className="flex items-center space-x-2">
                 {displayInfo.canReply && (
                   <Link
-                    href={`/dashboard/send?reply=${params.id}`}
+                    href={`/dashboard/send?reply=${params.id}&alias=${email.aliasEmail}`}
                     className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
                   >
                     Reply
                   </Link>
+                )}
+                {/* FIXED: Show why reply is disabled for viewers */}
+                {!displayInfo.canReply && !displayInfo.isSentEmail && alias?.isCollaborative && userRole === 'viewer' && (
+                  <span className="inline-flex items-center px-3 py-2 text-sm text-gray-500 bg-gray-100 rounded-md">
+                    Reply (Viewer Access Only)
+                  </span>
                 )}
                 <button
                   onClick={deleteEmail}
@@ -355,7 +462,7 @@ export default function EmailView() {
             </div>
           )}
 
-          {/* FIXED: Enhanced Technical Details */}
+          {/* Enhanced Technical Details */}
           <details className="px-6 py-4 border-t border-gray-200">
             <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded">
               Technical Details
@@ -363,6 +470,15 @@ export default function EmailView() {
             <div className="mt-3 space-y-2 text-xs text-gray-600 bg-gray-50 p-4 rounded-md">
               <div>
                 <strong>Email ID:</strong> {email._id}
+              </div>
+              <div>
+                <strong>User Role:</strong> {userRole || 'Unknown'}
+              </div>
+              <div>
+                <strong>Can Reply:</strong> {displayInfo.canReply ? 'Yes' : 'No'}
+              </div>
+              <div>
+                <strong>Is Collaborative:</strong> {alias?.isCollaborative ? 'Yes' : 'No'}
               </div>
               <div>
                 <strong>Message ID:</strong> {email.messageId || 'N/A'}
@@ -407,14 +523,6 @@ export default function EmailView() {
                   <span> at {formatFullDate(email.readAt)}</span>
                 )}
               </div>
-              {email.headers && email.headers.length > 0 && (
-                <div className="mt-3">
-                  <strong>Headers:</strong>
-                  <pre className="mt-1 p-2 bg-gray-100 rounded text-xs overflow-x-auto max-h-40">
-                    {JSON.stringify(email.headers, null, 2)}
-                  </pre>
-                </div>
-              )}
             </div>
           </details>
         </div>

@@ -17,7 +17,7 @@ export async function GET(request, { params }) {
     }
 
     const decoded = verifyToken(token);
-    const { id } = params;
+    const { id } = await params;
 
     console.log('Fetching email:', { emailId: id, userId: decoded.userId });
 

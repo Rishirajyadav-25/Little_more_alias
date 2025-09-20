@@ -4,23 +4,75 @@ import { mg } from '../../../../lib/mailgun';
 import { ObjectId } from 'mongodb';
 
 export async function POST(request) {
-  try {
+try {
     console.log('=== WEBHOOK RECEIVED ===');
     
-    const formData = await request.formData();
+    const contentType = request.headers.get('content-type') || '';
+    console.log('Content-Type:', contentType);
     
-    const recipient = formData.get('recipient');
-    const sender = formData.get('sender');
-    const subject = formData.get('subject') || '(No Subject)';
-    const bodyPlain = formData.get('body-plain') || '';
-    const bodyHtml = formData.get('body-html') || '';
-    const messageId = formData.get('Message-Id');
+    let recipient, sender, subject, bodyPlain, bodyHtml, messageId;
     
-    console.log('Email received:', { from: sender, to: recipient, subject });
+    // FIXED: Handle different content types
+    if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
+      // Handle form data (both multipart and urlencoded)
+      const formData = await request.formData();
+      
+      recipient = formData.get('recipient');
+      sender = formData.get('sender');
+      subject = formData.get('subject') || '(No Subject)';
+      bodyPlain = formData.get('body-plain') || '';
+      bodyHtml = formData.get('body-html') || '';
+      messageId = formData.get('Message-Id');
+      
+    } else if (contentType.includes('application/json')) {
+      // Handle JSON data
+      const jsonData = await request.json();
+      
+      recipient = jsonData.recipient;
+      sender = jsonData.sender;
+      subject = jsonData.subject || '(No Subject)';
+      bodyPlain = jsonData['body-plain'] || jsonData.bodyPlain || '';
+      bodyHtml = jsonData['body-html'] || jsonData.bodyHtml || '';
+      messageId = jsonData['Message-Id'] || jsonData.messageId;
+      
+    } else {
+      // FIXED: Try to parse as URL encoded text
+      try {
+        const text = await request.text();
+        console.log('Raw webhook data:', text.substring(0, 500)); // Log first 500 chars
+        
+        const params = new URLSearchParams(text);
+        
+        recipient = params.get('recipient');
+        sender = params.get('sender');
+        subject = params.get('subject') || '(No Subject)';
+        bodyPlain = params.get('body-plain') || '';
+        bodyHtml = params.get('body-html') || '';
+        messageId = params.get('Message-Id');
+        
+      } catch (parseError) {
+        console.error('Failed to parse webhook data:', parseError);
+        return NextResponse.json({ 
+          error: 'Invalid webhook data format',
+          contentType: contentType,
+          details: parseError.message 
+        }, { status: 400 });
+      }
+    }
+    
+    console.log('Parsed webhook data:', { 
+      from: sender, 
+      to: recipient, 
+      subject,
+      contentType 
+    });
 
     if (!recipient || !sender) {
       console.log('Missing required fields');
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      return NextResponse.json({ 
+        error: 'Missing required fields',
+        received: { recipient, sender, subject }
+      }, { status: 400 });
     }
 
     const client = await clientPromise;
@@ -41,7 +93,8 @@ export async function POST(request) {
     console.error('Webhook error:', error);
     return NextResponse.json({ 
       error: 'Webhook processing failed',
-      details: error.message 
+      details: error.message,
+      stack: error.stack
     }, { status: 500 });
   }
 }
